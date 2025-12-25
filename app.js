@@ -25,54 +25,98 @@ db.connect((err) => {
 app.get("/api/medicines", (req, res) => {
   const { city } = req.query;
 
-  if (!city) {
-    return res.status(400).json({ error: "city parametresi gereklidir." });
-  }
+  if (city) {
+    const query = `
+      SELECT 
+        m.id,
+        m.name,
+        m.manufacturer,
+        cms.month,
+        cms.sales_count
+      FROM medicines m
+      INNER JOIN city_medicine_sales cms ON m.id = cms.medicine_id
+      INNER JOIN cities c ON cms.city_id = c.id
+      WHERE c.name = ?
+      ORDER BY m.id, cms.month
+    `;
 
-  const query = `
-    SELECT 
-      m.id,
-      m.name,
-      m.manufacturer,
-      cms.month,
-      cms.sales_count
-    FROM medicines m
-    INNER JOIN city_medicine_sales cms ON m.id = cms.medicine_id
-    INNER JOIN cities c ON cms.city_id = c.id
-    WHERE c.name = ?
-    ORDER BY m.id, cms.month
-  `;
-
-  db.query(query, [city], (err, results) => {
-    if (err) {
-      console.error("Veritabanı hatası:", err);
-      return res.status(500).json({ error: "Veritabanı hatası." });
-    }
-
-    if (results.length === 0) {
-      return res.status(404).json({ error: "Şehir bulunamadı veya veri yok." });
-    }
-
-    const medicinesMap = {};
-    results.forEach((row) => {
-      if (!medicinesMap[row.id]) {
-        medicinesMap[row.id] = {
-          id: row.id,
-          name: row.name,
-          manufacturer: row.manufacturer,
-          monthlySales: [],
-        };
+    db.query(query, [city], (err, results) => {
+      if (err) {
+        console.error("Veritabanı hatası:", err);
+        return res.status(500).json({ error: "Veritabanı hatası." });
       }
-      medicinesMap[row.id].monthlySales.push(row.sales_count);
-    });
 
-    const medicines = Object.values(medicinesMap);
+      if (results.length === 0) {
+        return res
+          .status(404)
+          .json({ error: "Şehir bulunamadı veya veri yok." });
+      }
 
-    res.json({
-      city: city,
-      medicines: medicines,
+      const medicinesMap = {};
+      results.forEach((row) => {
+        if (!medicinesMap[row.id]) {
+          medicinesMap[row.id] = {
+            id: row.id,
+            name: row.name,
+            manufacturer: row.manufacturer,
+            monthlySales: [],
+          };
+        }
+        medicinesMap[row.id].monthlySales.push(row.sales_count);
+      });
+
+      const medicines = Object.values(medicinesMap);
+
+      res.json({
+        city: city,
+        medicines: medicines,
+      });
     });
-  });
+  } else {
+    const query = `
+      SELECT 
+        m.id,
+        m.name,
+        m.manufacturer,
+        cms.month,
+        SUM(cms.sales_count) as sales_count
+      FROM medicines m
+      INNER JOIN city_medicine_sales cms ON m.id = cms.medicine_id
+      GROUP BY m.id, m.name, m.manufacturer, cms.month
+      ORDER BY m.id, cms.month
+    `;
+
+    db.query(query, (err, results) => {
+      if (err) {
+        console.error("Veritabanı hatası:", err);
+        return res.status(500).json({ error: "Veritabanı hatası." });
+      }
+
+      if (results.length === 0) {
+        return res.status(404).json({ error: "Veri bulunamadı." });
+      }
+
+      const medicinesMap = {};
+      results.forEach((row) => {
+        if (!medicinesMap[row.id]) {
+          medicinesMap[row.id] = {
+            id: row.id,
+            name: row.name,
+            manufacturer: row.manufacturer,
+            monthlySales: [],
+          };
+        }
+        medicinesMap[row.id].monthlySales.push(parseInt(row.sales_count));
+      });
+
+      const medicines = Object.values(medicinesMap);
+
+      res.json({
+        country: "Türkiye",
+        medicines: medicines,
+      });
+    });
+  }
 });
 
 app.get("/api/medicines/total-sales", (req, res) => {
@@ -111,50 +155,89 @@ app.get("/api/medicines/:id", (req, res) => {
   const { id } = req.params;
   const { city } = req.query;
 
-  if (!city) {
-    return res.status(400).json({ error: "city parametresi gereklidir." });
-  }
+  if (city) {
+    const query = `
+      SELECT 
+        m.id,
+        m.name,
+        m.manufacturer,
+        cms.month,
+        cms.sales_count
+      FROM medicines m
+      INNER JOIN city_medicine_sales cms ON m.id = cms.medicine_id
+      INNER JOIN cities c ON cms.city_id = c.id
+      WHERE m.id = ? AND c.name = ?
+      ORDER BY cms.month
+    `;
 
-  const query = `
-    SELECT 
-      m.id,
-      m.name,
-      m.manufacturer,
-      cms.month,
-      cms.sales_count
-    FROM medicines m
-    INNER JOIN city_medicine_sales cms ON m.id = cms.medicine_id
-    INNER JOIN cities c ON cms.city_id = c.id
-    WHERE m.id = ? AND c.name = ?
-    ORDER BY cms.month
-  `;
+    db.query(query, [id, city], (err, results) => {
+      if (err) {
+        console.error("Veritabanı hatası:", err);
+        return res.status(500).json({ error: "Veritabanı hatası." });
+      }
 
-  db.query(query, [id, city], (err, results) => {
-    if (err) {
-      console.error("Veritabanı hatası:", err);
-      return res.status(500).json({ error: "Veritabanı hatası." });
-    }
+      if (results.length === 0) {
+        return res
+          .status(404)
+          .json({ error: "İlaç veya şehir bulunamadı veya veri yok." });
+      }
 
-    if (results.length === 0) {
-      return res
-        .status(404)
-        .json({ error: "İlaç veya şehir bulunamadı veya veri yok." });
-    }
+      const monthlySales = results.map((row) => row.sales_count);
 
-    const monthlySales = results.map((row) => row.sales_count);
+      const medicine = {
+        id: results[0].id,
+        name: results[0].name,
+        manufacturer: results[0].manufacturer,
+        monthlySales: monthlySales,
+      };
 
-    const medicine = {
-      id: results[0].id,
-      name: results[0].name,
-      manufacturer: results[0].manufacturer,
-      monthlySales: monthlySales,
-    };
-
-    res.json({
-      city: city,
-      medicine: medicine,
+      res.json({
+        city: city,
+        medicine: medicine,
+      });
     });
-  });
+  } else {
+    const query = `
+      SELECT 
+        m.id,
+        m.name,
+        m.manufacturer,
+        cms.month,
+        SUM(cms.sales_count) as sales_count
+      FROM medicines m
+      INNER JOIN city_medicine_sales cms ON m.id = cms.medicine_id
+      WHERE m.id = ?
+      GROUP BY m.id, m.name, m.manufacturer, cms.month
+      ORDER BY cms.month
+    `;
+
+    db.query(query, [id], (err, results) => {
+      if (err) {
+        console.error("Veritabanı hatası:", err);
+        return res.status(500).json({ error: "Veritabanı hatası." });
+      }
+
+      if (results.length === 0) {
+        return res
+          .status(404)
+          .json({ error: "İlaç bulunamadı veya veri yok." });
+      }
+
+      const monthlySales = results.map((row) => parseInt(row.sales_count));
+
+      const medicine = {
+        id: results[0].id,
+        name: results[0].name,
+        manufacturer: results[0].manufacturer,
+        monthlySales: monthlySales,
+      };
+
+      res.json({
+        country: "Türkiye",
+        medicine: medicine,
+      });
+    });
+  }
 });
 
 app.listen(PORT, () => {
